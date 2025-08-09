@@ -1,0 +1,27 @@
+{
+  "NTProvider": {
+    "types": {
+      "/FMSInfo": "FMSInfo",
+      "/SmartDashboard/Auto Chooser": "String Chooser",
+      "/SmartDashboard/BrakeDst": "String Chooser",
+      "/SmartDashboard/Chosen Auto": "String Chooser",
+      "/SmartDashboard/Field": "Field2d",
+      "/SmartDashboard/GainRot": "String Chooser",
+      "/SmartDashboard/GainTran": "String Chooser",
+      "/SmartDashboard/Headng+-": "String Chooser",
+      "/SmartDashboard/Tolernce": "String Chooser",
+      "/SmartDashboard/TrjShape": "String Chooser",
+      "/SmartDashboard/apchBrakeDst": "String Chooser",
+      "/SmartDashboard/apchGainRot": "String Chooser",
+      "/SmartDashboard/apchGainTran": "String Chooser",
+      "/SmartDashboard/apchHeadng+-": "String Chooser",
+      "/SmartDashboard/apchObjSize": "String Chooser",
+      "/SmartDashboard/apchTolernce": "String Chooser",
+      "/SmartDashboard/apchTrjShape": "String Chooser",
+      "/SmartDashboard/apmnGainRot": "String Chooser"
+    }
+  },
+  "NetworkTables Info": {
+    "visible": true
+  }
+}
