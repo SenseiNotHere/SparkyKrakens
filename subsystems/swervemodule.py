@@ -1,3 +1,5 @@
+import math
+
 from rev import SparkMax, SparkFlex, SparkLowLevel, SparkAbsoluteEncoder, SparkBase
 
 from phoenix6.hardware import TalonFX
@@ -32,6 +34,11 @@ class SwerveModule:
         :param turnMotorInverted:
         """
         
+        if drivingMotorType not in (SparkMax, SparkFlex, TalonFX):
+            raise ValueError("Invalid driving motor type. Must be SparkMax, SparkFlex, or TalonFX.")
+        if turningMotorType not in (SparkMax, SparkFlex, TalonFX):
+            raise ValueError("Invalid turning motor type. Must be SparkMax, SparkFlex, or TalonFX.")
+        
         self.chassisAngularOffset = chassisAngularOffset
         self.desiredState = SwerveModuleState(0.0, Rotation2d(0.0))
         
@@ -54,7 +61,10 @@ class SwerveModule:
             self.drivingPIDController = self.drivingMotor.getClosedLoopController()
             
             self.drivingEncoder.setPosition(0)
-            
+
+            self.drivingEncoder.setPositionConversionFactor(ModuleConstants.kDriveRotationsToMeters)
+            self.drivingEncoder.setVelocityConversionFactor(ModuleConstants.kDriveRPMToMps)
+
         # Now we can go to SparkFlex Driving
         elif drivingMotorType is SparkFlex:
             self.drivingMotor = SparkFlex(
@@ -74,7 +84,11 @@ class SwerveModule:
             self.drivingPIDController = self.drivingMotor.getClosedLoopController()
 
             self.drivingEncoder.setPosition(0)
-            
+
+            self.drivingEncoder.setPositionConversionFactor(ModuleConstants.kDriveRotationsToMeters)
+            self.drivingEncoder.setVelocityConversionFactor(ModuleConstants.kDriveRPMToMps)
+
+
         # Now its time for TalonFX Driving
         elif drivingMotorType is TalonFX:
             self.drivingMotor = TalonFX(drivingCANId)
@@ -88,8 +102,7 @@ class SwerveModule:
             self.drivingConfig.slot0.kD = ModuleConstants.kDrivingD
             self.drivingMotor.configurator.apply(self.drivingConfig)
 
-            self.velocity_request = VelocityVoltage(0).with_slot(0)
-            self.position_request = PositionVoltage(0).with_slot(0)
+            self.driving_velocity_request = VelocityVoltage(0).with_slot(0)
 
             self.resetEncoders()
         
@@ -97,6 +110,7 @@ class SwerveModule:
         if turningMotorType is SparkMax:
             self.turningMotor = SparkMax(
                 turningCANId,
+
                 SparkLowLevel.MotorType.kBrushless
             )
             
@@ -109,8 +123,12 @@ class SwerveModule:
             
             self.turningEncoder = self.turningMotor.getAbsoluteEncoder()
             
-            self.turningPIDController = self.turningMotor.getClosedLoopController()
+            self.turningEncoder.setPositionConversionFactor(2 * math.pi)  # rotations -> radians
+            self.turningEncoder.setVelocityConversionFactor(2 * math.pi)  # rotations/s -> rad/s
             
+            self.turningPIDController = self.turningMotor.getClosedLoopController()
+            self.turningPIDController.setFeedbackDevice(self.turningEncoder)
+
             self.desiredState.angle = Rotation2d(self.turningEncoder.getPosition())
             
         # We now go to SparkFlex Turning
@@ -129,7 +147,11 @@ class SwerveModule:
 
             self.turningEncoder = self.turningMotor.getAbsoluteEncoder()
 
+            self.turningEncoder.setPositionConversionFactor(2 * math.pi)
+            self.turningEncoder.setVelocityConversionFactor(2 * math.pi)
+
             self.turningPIDController = self.turningMotor.getClosedLoopController()
+            self.turningPIDController.setFeedbackDevice(self.turningEncoder)
 
             self.desiredState.angle = Rotation2d(self.turningEncoder.getPosition())
         
@@ -145,9 +167,9 @@ class SwerveModule:
             turningConfig.slot0.kD = ModuleConstants.kTurningD
             
             turningConfig.motor_output.inverted = InvertedValue.CLOCKWISE_POSITIVE if turnMotorInverted else InvertedValue.COUNTER_CLOCKWISE_POSITIVE
-            
-            self.velocity_request = VelocityVoltage(0).with_slot(0)
-            self.position_request = PositionVoltage(0).with_slot(0)
+            self.turningMotor.configurator.apply(turningConfig)
+
+            self.turning_position_request = PositionVoltage(0).with_slot(0)
             
             self.resetEncoders()
             
@@ -156,21 +178,19 @@ class SwerveModule:
         Returns the current state of the swerve module.
         :return: SwerveModuleState
         """
-        self.drivingState = None
-        self.turningState = None
         
-        # Driving motor values
         if isinstance(self.drivingMotor, (SparkMax, SparkFlex)):
             self.drivingState = self.drivingEncoder.getVelocity()
         elif isinstance(self.drivingMotor, TalonFX):
-            self.drivingState = self.drivingMotor.get_velocity().value
+            drive_rps = self.drivingMotor.get_velocity().value
+            self.drivingState = (drive_rps / ModuleConstants.kDriveGearRatio) * ModuleConstants.kWheelCircumferenceMeters
         
-        # Turning motor values
         if isinstance(self.turningMotor, (SparkMax, SparkFlex)):
             self.turningState = self.turningEncoder.getPosition() - self.chassisAngularOffset
         elif isinstance(self.turningMotor, TalonFX):
-            self.turningState = self.turningMotor.get_position().value - self.chassisAngularOffset
-            
+            turn_motor_rot = self.turningMotor.get_position().value
+            module_rot = turn_motor_rot / ModuleConstants.kTurnGearRatio
+            self.turningState = (module_rot * 2 * math.pi) - self.chassisAngularOffset
         return SwerveModuleState(
             self.drivingState,
             Rotation2d(self.turningState)
@@ -181,22 +201,20 @@ class SwerveModule:
         Returns the current position of the swerve module.
         :return: SwerveModulePosition
         """
-        
-        distance = None
-        angle = None
-        
-        # Driving motor values
+
         if isinstance(self.drivingMotor, (SparkMax, SparkFlex)):
             distance = self.drivingEncoder.getPosition()
         elif isinstance(self.drivingMotor, TalonFX):
-            distance = self.drivingMotor.get_position().value
+            drive_motor_rot = self.drivingMotor.get_position().value
+            wheel_rot = drive_motor_rot / ModuleConstants.kDriveGearRatio
+            distance = wheel_rot * ModuleConstants.kWheelCircumferenceMeters
             
-        # Turning motor values
         if isinstance(self.turningMotor, (SparkMax, SparkFlex)):
             angle = self.turningEncoder.getPosition() - self.chassisAngularOffset
         elif isinstance(self.turningMotor, TalonFX):
-            angle = self.turningMotor.get_position().value - self.chassisAngularOffset
-            
+            turn_motor_rot = self.turningMotor.get_position().value
+            module_rot = turn_motor_rot / ModuleConstants.kTurnGearRatio
+            angle = (module_rot * 2 * math.pi) - self.chassisAngularOffset
         return SwerveModulePosition(
             distance,
             Rotation2d(angle)
@@ -208,69 +226,71 @@ class SwerveModule:
         :param desiredState:
         :return:
         """
-        
+
         if abs(desiredState.speed) < ModuleConstants.kDrivingMinSpeedMetersPerSecond:
-            # If the speed is too low, we stop the module. Brownout prevention.
-            inXBrake = abs(abs(desiredState.angle.degrees()) -  45) < 0.01
-            
+            deg = desiredState.angle.degrees() % 90.0
+            inXBrake = min(deg, 90.0 - deg) < 5.0  # 5° tol
             if not inXBrake:
                 self.stop()
                 return
-            
+
         # Apply chassis angular offset to desired state.
         correctedDesiredState = SwerveModuleState()
         correctedDesiredState.speed = desiredState.speed
         correctedDesiredState.angle = desiredState.angle + Rotation2d(self.chassisAngularOffset)
         
         # Optimize the reference state to avoid spinning further than 90 degrees.
-        optimizedDesiredState = correctedDesiredState
-        
         if isinstance(self.turningMotor, (SparkMax, SparkFlex)):
-            optimizedDesiredState = correctedDesiredState
+            turningPosition = self.turningEncoder.getPosition() - self.chassisAngularOffset  # radians
         elif isinstance(self.turningMotor, TalonFX):
-            optimizedDesiredState = correctedDesiredState
-        
-        turningPosition = None
-        
-        if isinstance(self.turningMotor, (SparkMax, SparkFlex)):
-            turningPosition = self.turningEncoder.getPosition()
-        elif isinstance(self.turningMotor, TalonFX):
-            turningPosition = self.turningMotor.get_position().value
-            
-        SwerveModuleState.optimize(optimizedDesiredState, Rotation2d(turningPosition))
+            turn_motor_rot = self.turningMotor.get_position().value
+            module_rot = turn_motor_rot / ModuleConstants.kTurnGearRatio
+            turningPosition = (module_rot * 2 * math.pi) - self.chassisAngularOffset  # radians
+
+        turningPosition = ((turningPosition + math.pi) % (2 * math.pi)) - math.pi
+
+        optimizedDesiredState = SwerveModuleState.optimize(
+            correctedDesiredState, Rotation2d(turningPosition)
+        )
         
         if isinstance(self.drivingMotor, (SparkMax, SparkFlex)):
             self.drivingPIDController.setReference(optimizedDesiredState.speed, SparkLowLevel.ControlType.kVelocity)
-            self.turningPIDController.setReference(optimizedDesiredState.angle.radians(), SparkLowLevel.ControlType.kPosition)
         elif isinstance(self.drivingMotor, TalonFX):
-            self.velocity_request.value = optimizedDesiredState.speed
-            self.position_request.value = optimizedDesiredState.angle.radians()
+            desired_drive_rps = (optimizedDesiredState.speed / ModuleConstants.kWheelCircumferenceMeters) \
+                                * ModuleConstants.kDriveGearRatio
+            self.drivingMotor.set_control(self.driving_velocity_request.with_velocity(desired_drive_rps))
 
-            self.drivingMotor.set(self.velocity_request.value)
-            self.turningMotor.set(self.position_request.value)
-            
         self.desiredState = optimizedDesiredState
-            
+
+        if isinstance(self.turningMotor, (SparkMax, SparkFlex)):
+            self.turningPIDController.setReference(
+                optimizedDesiredState.angle.radians(), SparkLowLevel.ControlType.kPosition
+            )
+        elif isinstance(self.turningMotor, TalonFX):
+            desired_module_rot = optimizedDesiredState.angle.radians() / (2 * math.pi)
+            desired_motor_rot = desired_module_rot * ModuleConstants.kTurnGearRatio
+            self.turningMotor.set_control(
+                self.turning_position_request.with_position(desired_motor_rot)
+            )
+
     def stop(self) -> None:
-        """
-        Stops the swerve module.
-        :return:
-        """
+        # hold turn
+        if isinstance(self.turningMotor, (SparkMax, SparkFlex)):
+            hold = self.turningEncoder.getPosition()  # radians
+            self.turningPIDController.setReference(hold, SparkLowLevel.ControlType.kPosition)
+        elif isinstance(self.turningMotor, TalonFX):
+            cur_rot = self.turningMotor.get_position().value
+            self.turningMotor.set_control(self.turning_position_request.with_position(cur_rot))
+
+        # zero drive
         if isinstance(self.drivingMotor, (SparkMax, SparkFlex)):
             self.drivingPIDController.setReference(0, SparkLowLevel.ControlType.kVelocity)
-            self.turningPIDController.setReference(0, SparkLowLevel.ControlType.kPosition)
-            
-            if self.desiredState.speed is not 0:
-                self.desiredState = SwerveModuleState(0, self.desiredState.angle)
-                
         elif isinstance(self.drivingMotor, TalonFX):
-            self.drivingMotor.set_control(self.velocity_request.with_velocity(0))
-            currentPositon = self.turningMotor.get_position().value
-            self.turningMotor.set_control(self.position_request.with_position(currentPositon))
+            self.drivingMotor.set_control(self.driving_velocity_request.with_velocity(0))
 
-            if self.desiredState.speed is not 0:
-                self.desiredState = SwerveModuleState(0, self.desiredState.angle)
-                
+        if self.desiredState.speed != 0:
+            self.desiredState = SwerveModuleState(0, self.desiredState.angle)
+
     def resetEncoders(self) -> None:
         """
         Resets the encoders of the swerve module.

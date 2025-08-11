@@ -146,10 +146,8 @@ class DriveSubsystem(Subsystem):
         return DrivingConstants.kDriveKinematics.toChassisSpeeds(states)
 
     def shouldFlipPath(self):
-        # Boolean supplier that controls when the path will be mirrored for the red alliance
-        # This will flip the path being followed to the red side of the field.
-        # THE ORIGIN WILL REMAIN ON THE BLUE SIDE
-        return DriverStation.getAlliance() == DriverStation.Alliance.kRed
+        alliance = DriverStation.getAlliance()
+        return alliance is not None and alliance == DriverStation.Alliance.kRed
 
     def periodic(self) -> None:
         if self.simPhysics is not None:
@@ -203,9 +201,7 @@ class DriveSubsystem(Subsystem):
         )
         self.odometryHeadingOffset = self.odometry.getPose().rotation() - self.getGyroHeading()
 
-        self.field = Field2d()
-        SmartDashboard.putData("Field", self.field)
-
+        self.field.setRobotPose(pose)
 
     def adjustOdometry(self, dTrans: Translation2d, dRot: Rotation2d):
         pose = self.getPose()
@@ -259,14 +255,19 @@ class DriveSubsystem(Subsystem):
         :param rateLimit:     Whether to enable rate limiting for smoother control.
         :param square:        Whether to square the inputs (useful for manual control)
         """
+
+        xSpeed = 0.0 if abs(xSpeed) < OIConstants.kDriveDeadband else xSpeed
+        ySpeed = 0.0 if abs(ySpeed) < OIConstants.kDriveDeadband else ySpeed
+        rot = 0.0 if abs(rot) < OIConstants.kDriveDeadband else rot
+
         if square:
             rot = rot * abs(rot)
-            norm = math.sqrt(xSpeed * xSpeed + ySpeed * ySpeed)
+            norm = math.hypot(xSpeed, ySpeed)
             xSpeed = xSpeed * norm
             ySpeed = ySpeed * norm
 
         if (xSpeed != 0 or ySpeed != 0) and self.maxSpeedScaleFactor is not None:
-            norm = math.sqrt(xSpeed * xSpeed + ySpeed * ySpeed)
+            norm = math.hypot(xSpeed, ySpeed)
             scale = abs(self.maxSpeedScaleFactor() / norm)
             if scale < 1:
                 xSpeed = xSpeed * scale
@@ -418,21 +419,19 @@ class DriveSubsystem(Subsystem):
 
         return Rotation2d.fromDegrees(self._lastGyroAngle * DriveConstants.kGyroReversed)
 
-
     def getTurnRate(self) -> float:
-        """Returns the turn rate of the robot (in degrees per second)
-
-        :returns: The turn rate of the robot, in degrees per second
+        """
+        Returns the current turn rate of the robot in degrees per second.
+        :return:
         """
         return self.gyro.getRate() * DriveConstants.kGyroReversed
 
-
     def getTurnRateDegreesPerSec(self) -> float:
-        """Returns the turn rate of the robot (in degrees per second)
-
-        :returns: The turn rate of the robot, in degrees per second
         """
-        return self.getTurnRate() * 180 / math.pi
+        Returns the current turn rate of the robot in degrees per second.
+        :return:
+        """
+        return self.getTurnRate()  # already deg/s
 
 
 class BadSimPhysics(object):
@@ -474,4 +473,4 @@ class BadSimPhysics(object):
 
             g = drivetrain.gyro
             g.setAngleAdjustment(g.getAngleAdjustment() + rot * DriveConstants.kGyroReversed)
-            drivetrain.adjustOdometry(trans, Rotation2d())
+            drivetrain.adjustOdometry(trans, Rotation2d.fromDegrees(rot))

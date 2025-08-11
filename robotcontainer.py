@@ -13,10 +13,12 @@ from wpimath.controller import PIDController, ProfiledPIDControllerRadians, Holo
 from wpimath.geometry import Pose2d, Rotation2d, Translation2d
 from wpimath.trajectory import TrajectoryConfig, TrajectoryGenerator
 
-from subsystems.drivesubsystem import DriveSubsystem, AutoBuilder, BadSimPhysics
+from subsystems.drivesubsystem import DriveSubsystem, BadSimPhysics
+from pathplannerlib.auto import AutoBuilder
 from commands.holonomicdrive import HolonomicDrive
 from buttonbindings import ButtonBindings
 from constants import OIConstants
+from autos.controller import ManAutoBuilder
 
 class RobotContainer:
     """
@@ -27,9 +29,17 @@ class RobotContainer:
     def __init__(self, robot):
         #The robot's subsystems
         self.robotDrive = DriveSubsystem()
-        if commands2.TimedCommandRobot.isSimulation():
+        if wpilib.RobotBase.isSimulation():
             self.robotDrive.simPhysics = BadSimPhysics(self.robotDrive, robot)
-        self.autoChooser = AutoBuilder.buildAutoChooser()
+            
+        self.usePathPlanner = True
+
+        if self.usePathPlanner:
+            self.autoChooser = AutoBuilder.buildAutoChooser()
+        else:
+            self.manAutoBuilder = ManAutoBuilder(self.robotDrive)
+            self.autoChooser = self.manAutoBuilder.configure_autos()
+
         SmartDashboard.putData("Auto Chooser", self.autoChooser)
 
         #Setting up controllers
@@ -38,34 +48,35 @@ class RobotContainer:
         self.buttonBindings = ButtonBindings(self)
         self.buttonBindings.configureButtonBindings()
 
-        self.robotDrive.setDefaultCommand(
-            HolonomicDrive(
-                self.robotDrive,
-                forwardSpeed=lambda: self.driverController.getRawAxis(PS4Controller.Axis.kRightY),
-                leftSpeed=lambda: self.driverController.getRawAxis(PS4Controller.Axis.kRightX),
-                rotationSpeed=lambda: -self.driverController.getRawAxis(PS4Controller.Axis.kLeftY),
-                deadband=OIConstants.kDriveDeadband,
-                fieldRelative=True,
-                rateLimit=True,
-                square=True,
-            )
-        )
+        self.robotDrive.setDefaultCommand(HolonomicDrive(
+            self.robotDrive,
+            forwardSpeed = lambda: -self.driverController.getRawAxis(PS4Controller.Axis.kLeftY),
+            leftSpeed = lambda: -self.driverController.getRawAxis(PS4Controller.Axis.kLeftX),
+            rotationSpeed = lambda: -self.driverController.getRawAxis(PS4Controller.Axis.kRightX),
+            deadband = OIConstants.kDriveDeadband,
+            fieldRelative = True,
+            rateLimit = True,
+            square = True,
+        ))
+
     def disablePIDSubsystems(self):
         """
         Disables all PID Subsystems
         """
 
-    def getAutonomousCommand(self) -> commands2.Command:
+    def getAutonomousCommand(self):
         """
-        :returns: the command to run in autonomous mode.
+        Returns the command that will be run when autonomous mode is enabled.
         """
-        command = self.autoChooser.getSelected()
-        if command is None:
-            print("WARNING: No autonomous routines selected!") #Will return a command that does nothing
+        selected = self.autoChooser.getSelected()
+        if selected is None:
+            print("WARNING: No autonomous selected!")
             return InstantCommand()
-
-        print("Running autonomous routine: " + command.getName())
-        return command
+        try:
+            print("Running autonomous routine:", selected.getName())
+        except AttributeError:
+            pass
+        return selected
 
     def getTestCommand(self) -> typing.Optional[commands2.Command]:
         """
